@@ -42,7 +42,17 @@ class TwitterCollector:
                 # Get the most recent file
                 latest_file = max(files, key=os.path.getctime)
                 print(f"\nFound existing tweet data: {latest_file}")
+                
+                # Check if file is empty or too small (less than 100 bytes)
+                if os.path.getsize(latest_file) < 100:
+                    print("Existing file is empty or corrupted, will collect new data")
+                    return pd.DataFrame()
+                    
                 df = pd.read_csv(latest_file)
+                if df.empty:
+                    print("No tweets found in existing file")
+                    return pd.DataFrame()
+                    
                 print(f"Loaded {len(df)} existing tweets")
                 return df
             return pd.DataFrame()
