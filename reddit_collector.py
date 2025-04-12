@@ -79,6 +79,14 @@ class RedditCollector:
                 title_sentiment = TextBlob(post.title).sentiment
                 text_sentiment = TextBlob(post.selftext).sentiment if post.selftext else title_sentiment
                 
+                # Print sample sentiment analysis
+                if len(posts) < 3:  # Show first 3 posts as examples
+                    print(f"\nSample Post Analysis:")
+                    print(f"Title: {post.title}")
+                    print(f"Title Sentiment: Polarity={title_sentiment.polarity:.3f}, Subjectivity={title_sentiment.subjectivity:.3f}")
+                    if post.selftext:
+                        print(f"Text Sentiment: Polarity={text_sentiment.polarity:.3f}, Subjectivity={text_sentiment.subjectivity:.3f}")
+                
                 posts.append({
                     'id': post.id,
                     'created_at': datetime.fromtimestamp(post.created_utc),
