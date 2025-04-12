@@ -16,6 +16,7 @@ import signal
 import platform
 import requests
 from fake_useragent import UserAgent
+import ssl
 
 class TimeoutError(Exception):
     pass
@@ -27,24 +28,35 @@ class TruthCollector:
     def __init__(self, proxy_list=None):
         print("Starting TruthCollector initialization...")
         
-        # Initialize proxy list with the provided proxies
-        self.proxy_list = proxy_list or [
-            "http://156.242.38.14:3128",
-            "http://156.228.105.239:3128"
-        ]
+        # Initialize proxy list with free proxies
+        self.proxy_list = proxy_list or self._fetch_free_proxies()
         self.current_proxy_index = 0
+        self.max_proxy_retries = 3
+        self.proxy_retry_count = 0
         
-        # Set up Chrome options
+        # Set up Chrome options with advanced anti-detection
         print("Setting up Chrome options...")
         chrome_options = Options()
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-gpu')
-        chrome_options.add_argument('--window-size=1920,1080')
+        chrome_options.add_argument('--window-size=412,915')  # Mobile-like window size
+        chrome_options.add_argument('--ignore-certificate-errors')
+        chrome_options.add_argument('--allow-insecure-localhost')
         
-        # Use random user agent
-        ua = UserAgent()
-        chrome_options.add_argument(f'--user-agent={ua.random}')
+        # Advanced anti-detection settings
+        chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
+        
+        # Add mobile user agent
+        mobile_user_agents = [
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Mobile/15E148 Safari/604.1',
+            'Mozilla/5.0 (Linux; Android 11; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.141 Mobile Safari/537.36',
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1'
+        ]
+        self.current_user_agent = random.choice(mobile_user_agents)
+        chrome_options.add_argument(f'--user-agent={self.current_user_agent}')
         
         # Initialize the WebDriver
         print("Initializing Chrome WebDriver...")
@@ -56,7 +68,6 @@ class TruthCollector:
             
             if system == "Darwin" and machine == "arm64":
                 print("Detected Mac ARM64 architecture")
-                # Use the Homebrew-installed ChromeDriver
                 chrome_driver_path = "/opt/homebrew/bin/chromedriver"
                 if not os.path.exists(chrome_driver_path):
                     raise FileNotFoundError(f"ChromeDriver not found at {chrome_driver_path}. Please run 'brew install chromedriver'")
@@ -66,14 +77,25 @@ class TruthCollector:
             else:
                 raise NotImplementedError("This script currently only supports Mac ARM64")
             
-            # Set up proxy if available
-            if self.proxy_list:
-                proxy = self._get_next_proxy()
-                print(f"Using proxy: {proxy}")
-                chrome_options.add_argument(f'--proxy-server={proxy}')
+            # Set up initial proxy
+            proxy = self._get_next_proxy()
+            print(f"Using proxy: {proxy}")
+            chrome_options.add_argument(f'--proxy-server={proxy}')
             
             print("Creating Chrome WebDriver instance...")
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            
+            # Execute CDP commands to further reduce detection
+            self.driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+                "userAgent": self.current_user_agent
+            })
+            self.driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+                'source': '''
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    })
+                '''
+            })
             
             # Test the connection
             print("Testing WebDriver connection...")
@@ -88,7 +110,7 @@ class TruthCollector:
             raise
         
         self.base_url = "https://truthsocial.com"
-        self.rate_limit_delay = random.uniform(5, 10)  # Random delay between 5-10 seconds
+        self.rate_limit_delay = random.uniform(5, 10)
         self.last_request_time = 0
         print("TruthCollector initialization completed successfully")
 
@@ -102,18 +124,48 @@ class TruthCollector:
         return proxy
 
     def _rotate_proxy(self):
-        """Rotate to a new proxy"""
+        """Rotate to a new proxy and reinitialize the driver"""
         if not self.proxy_list:
             return False
         
         try:
+            self.proxy_retry_count += 1
+            if self.proxy_retry_count >= self.max_proxy_retries:
+                print("Max proxy retries reached. Refreshing proxy list...")
+                self.proxy_list = self._fetch_free_proxies()
+                self.proxy_retry_count = 0
+                if not self.proxy_list:
+                    return False
+            
             old_proxy = self._get_next_proxy()
             new_proxy = self._get_next_proxy()
             print(f"Rotating proxy from {old_proxy} to {new_proxy}")
             
-            # Update Chrome options with new proxy
-            self.driver.quit()
-            chrome_options = self.driver.options
+            # Close existing driver
+            try:
+                self.driver.quit()
+            except:
+                pass
+            
+            # Create new options
+            chrome_options = Options()
+            chrome_options.add_argument('--no-sandbox')
+            chrome_options.add_argument('--disable-dev-shm-usage')
+            chrome_options.add_argument('--disable-gpu')
+            chrome_options.add_argument('--window-size=412,915')
+            chrome_options.add_argument('--ignore-certificate-errors')
+            chrome_options.add_argument('--allow-insecure-localhost')
+            chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            chrome_options.add_experimental_option('useAutomationExtension', False)
+            
+            # Use a different user agent
+            self.current_user_agent = random.choice([
+                'Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Mobile/15E148 Safari/604.1',
+                'Mozilla/5.0 (Linux; Android 11; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.141 Mobile Safari/537.36',
+                'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1'
+            ])
+            chrome_options.add_argument(f'--user-agent={self.current_user_agent}')
             chrome_options.add_argument(f'--proxy-server={new_proxy}')
             
             # Reinitialize the driver
@@ -121,6 +173,19 @@ class TruthCollector:
                 service=Service(executable_path="/opt/homebrew/bin/chromedriver"),
                 options=chrome_options
             )
+            
+            # Reapply CDP commands
+            self.driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+                "userAgent": self.current_user_agent
+            })
+            self.driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+                'source': '''
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    })
+                '''
+            })
+            
             return True
         except Exception as e:
             print(f"Error rotating proxy: {str(e)}")
@@ -137,13 +202,28 @@ class TruthCollector:
     def _scroll_page(self):
         """Scroll the page to simulate human behavior"""
         try:
-            # Scroll down slowly
-            for i in range(3):
-                self.driver.execute_script(f"window.scrollTo(0, {i * 300});")
-                time.sleep(random.uniform(0.5, 1.5))
-            # Scroll back up
+            # Get page height
+            page_height = self.driver.execute_script("return document.body.scrollHeight")
+            
+            # Scroll down in random increments
+            current_position = 0
+            while current_position < page_height:
+                scroll_amount = random.randint(100, 300)
+                current_position += scroll_amount
+                self.driver.execute_script(f"window.scrollTo(0, {current_position});")
+                time.sleep(random.uniform(0.5, 2.0))
+                
+                # Randomly scroll back up sometimes
+                if random.random() < 0.2:
+                    back_amount = random.randint(50, 150)
+                    current_position = max(0, current_position - back_amount)
+                    self.driver.execute_script(f"window.scrollTo(0, {current_position});")
+                    time.sleep(random.uniform(0.5, 1.5))
+            
+            # Scroll back to top
             self.driver.execute_script("window.scrollTo(0, 0);")
-            time.sleep(random.uniform(0.5, 1.5))
+            time.sleep(random.uniform(1.0, 2.0))
+            
         except Exception as e:
             print(f"Error during scrolling: {str(e)}")
 
@@ -154,24 +234,52 @@ class TruthCollector:
             print(f"Navigating to {url}")
             
             # Set page load timeout
-            self.driver.set_page_load_timeout(30)
+            self.driver.set_page_load_timeout(60)
             
             try:
                 self.driver.get(url)
             except TimeoutException:
-                print("Page load timed out after 30 seconds")
+                print("Page load timed out after 60 seconds")
                 return None
+            except WebDriverException as e:
+                if "ERR_CONNECTION_RESET" in str(e):
+                    print("Connection reset detected. Rotating proxy...")
+                    if self._rotate_proxy():
+                        return self._get_page(url)
+                    return None
+                raise
             
             print("Page loaded, waiting for body element...")
             
-            # Wait for the page to load
+            # Wait for the page to load with multiple element checks
             try:
-                WebDriverWait(self.driver, 10).until(
+                # First wait for body
+                WebDriverWait(self.driver, 20).until(
                     EC.presence_of_element_located((By.TAG_NAME, "body"))
                 )
                 print("Body element found")
+                
+                # Check for error messages
+                if "unavailable in your area" in self.driver.page_source.lower():
+                    print("Detected geo-blocking. Rotating proxy...")
+                    if self._rotate_proxy():
+                        return self._get_page(url)
+                    return None
+                
+                # Then wait for main content
+                WebDriverWait(self.driver, 20).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "main"))
+                )
+                print("Main content found")
+                
+                # Simulate human-like behavior
+                self._scroll_page()
+                
+                # Additional wait for dynamic content
+                time.sleep(random.uniform(3, 7))
+                
             except TimeoutException:
-                print("Timeout waiting for body element")
+                print("Timeout waiting for page elements")
                 return None
             
             # Check if we're on a login page
@@ -181,9 +289,6 @@ class TruthCollector:
             if "login" in current_url:
                 print("Warning: Redirected to login page. Truth Social may be blocking automated access.")
                 return None
-            
-            # Simulate human-like behavior
-            self._scroll_page()
             
             return self.driver.page_source
             
@@ -198,29 +303,69 @@ class TruthCollector:
 
         posts = []
         page = 1
+        retry_count = 0
+        max_retries = 3
         
         try:
-            while len(posts) < max_posts:
+            while len(posts) < max_posts and retry_count < max_retries:
                 url = f"{self.base_url}/@realDonaldTrump?page={page}"
                 print(f"\nFetching page {page}...")
                 
                 html = self._get_page(url)
                 if not html:
-                    print("Failed to fetch page. Stopping collection.")
-                    break
-
-                # Wait for posts to load
+                    print("Failed to fetch page. Retrying...")
+                    retry_count += 1
+                    if retry_count >= max_retries:
+                        print("Max retries reached. Stopping collection.")
+                        break
+                    time.sleep(10)  # Wait before retry
+                    continue
+                
+                retry_count = 0  # Reset retry count on successful page load
+                
+                # Wait for posts to load with multiple selectors
                 print("Waiting for posts to load...")
                 try:
-                    WebDriverWait(self.driver, 10).until(
-                        EC.presence_of_element_located((By.CLASS_NAME, "status"))
-                    )
-                    print("Posts found on page")
+                    # Try different selectors for posts
+                    selectors = [
+                        (By.CLASS_NAME, "status"),
+                        (By.CLASS_NAME, "status__wrapper"),
+                        (By.CLASS_NAME, "status__content")
+                    ]
+                    
+                    for by, selector in selectors:
+                        try:
+                            WebDriverWait(self.driver, 20).until(
+                                EC.presence_of_element_located((by, selector))
+                            )
+                            print(f"Posts found using selector: {selector}")
+                            break
+                        except TimeoutException:
+                            continue
+                    
+                    # Additional wait for content to load
+                    time.sleep(5)
+                    
                 except TimeoutException:
                     print("Timeout waiting for posts to load")
-                    break
+                    continue
 
-                post_elements = self.driver.find_elements(By.CLASS_NAME, "status")
+                # Try different methods to find posts
+                post_elements = []
+                for by, selector in selectors:
+                    try:
+                        elements = self.driver.find_elements(by, selector)
+                        if elements:
+                            post_elements = elements
+                            print(f"Found {len(elements)} posts using selector: {selector}")
+                            break
+                    except:
+                        continue
+                
+                if not post_elements:
+                    print("No posts found on page")
+                    continue
+                
                 print(f"Found {len(post_elements)} posts on page {page}")
                 
                 for post in post_elements:
@@ -372,7 +517,7 @@ class TruthCollector:
             response = requests.get(api_url)
             if response.status_code == 200:
                 proxy_list = response.text.strip().split('\r\n')
-                proxies.extend([f"http://{proxy}" for proxy in proxy_list])
+                proxies.extend([f"https://{proxy}" for proxy in proxy_list])
                 print(f"Added {len(proxy_list)} proxies from ProxyScrape")
         except Exception as e:
             print(f"Error fetching from ProxyScrape: {str(e)}")
@@ -382,10 +527,16 @@ class TruthCollector:
         working_proxies = []
         for proxy in proxies:
             try:
+                # Create a custom SSL context
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                
                 response = requests.get(
                     'https://api.ipify.org?format=json',
-                    proxies={'http': proxy, 'https': proxy},
-                    timeout=5
+                    proxies={'https': proxy},
+                    timeout=5,
+                    verify=False
                 )
                 if response.status_code == 200:
                     working_proxies.append(proxy)
