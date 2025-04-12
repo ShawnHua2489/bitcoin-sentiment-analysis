@@ -8,4 +8,7 @@ requests==2.31.0
 beautifulsoup4==4.12.2
 ccxt==4.1.13
 matplotlib==3.7.2
-seaborn==0.12.2 
+seaborn==0.12.2
+newsapi-python==0.2.7
+pytrends==4.9.0
+python-binance==1.0.19 

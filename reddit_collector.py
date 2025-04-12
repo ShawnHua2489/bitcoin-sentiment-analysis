@@ -2,6 +2,8 @@ import praw
 import pandas as pd
 from datetime import datetime, timedelta
 from textblob import TextBlob
+import os
+import glob
 from config import *
 
 class RedditCollector:
@@ -19,6 +21,46 @@ class RedditCollector:
             print(f"Error connecting to Reddit API: {str(e)}")
             print("Please check your credentials in the .env file")
             raise
+        
+    def get_existing_posts(self):
+        """Get the most recent Reddit data file if it exists"""
+        try:
+            # Create data directory if it doesn't exist
+            os.makedirs(DATA_DIR, exist_ok=True)
+            
+            # Find all reddit data files
+            files = glob.glob(os.path.join(DATA_DIR, 'reddit_data_*.csv'))
+            if files:
+                # Get the most recent file
+                latest_file = max(files, key=os.path.getctime)
+                print(f"\nFound existing Reddit data: {latest_file}")
+                
+                # Check if file is empty or too small (less than 100 bytes)
+                if os.path.getsize(latest_file) < 100:
+                    print("Existing file is empty or corrupted, will collect new data")
+                    return pd.DataFrame()
+                    
+                df = pd.read_csv(latest_file)
+                if df.empty:
+                    print("No posts found in existing file")
+                    return pd.DataFrame()
+                    
+                # Check if data is recent enough (within TIME_WINDOW_HOURS)
+                df['created_at'] = pd.to_datetime(df['created_at'])
+                latest_post_time = df['created_at'].max()
+                time_diff = datetime.now() - latest_post_time
+                
+                if time_diff.total_seconds() / 3600 <= TIME_WINDOW_HOURS:
+                    print(f"Loaded {len(df)} existing posts from the last {TIME_WINDOW_HOURS} hours")
+                    return df
+                else:
+                    print(f"Existing data is too old ({time_diff.total_seconds()/3600:.1f} hours), will collect new data")
+                    return pd.DataFrame()
+                    
+            return pd.DataFrame()
+        except Exception as e:
+            print(f"Error loading existing posts: {str(e)}")
+            return pd.DataFrame()
         
     def get_posts(self, subreddit_name, max_posts=MAX_REDDIT_POSTS):
         posts = []
@@ -59,17 +101,21 @@ class RedditCollector:
         return pd.DataFrame(posts)
     
     def collect_bitcoin_posts(self):
-        subreddits = ['Bitcoin', 'CryptoCurrency', 'BitcoinMarkets']
-        all_posts = pd.DataFrame()
+        # First try to get existing posts
+        all_posts = self.get_existing_posts()
         
-        for subreddit in subreddits:
-            print(f"\nCollecting posts from r/{subreddit}")
-            posts = self.get_posts(subreddit)
-            if not posts.empty:
-                all_posts = pd.concat([all_posts, posts], ignore_index=True)
-                print(f"Successfully collected {len(posts)} posts from r/{subreddit}")
-            else:
-                print(f"No posts collected from r/{subreddit}")
+        if all_posts.empty:
+            print("\nNo existing Reddit data found or data is too old. Attempting to collect new posts...")
+            subreddits = ['Bitcoin', 'CryptoCurrency', 'BitcoinMarkets']
+            
+            for subreddit in subreddits:
+                print(f"\nCollecting posts from r/{subreddit}")
+                posts = self.get_posts(subreddit)
+                if not posts.empty:
+                    all_posts = pd.concat([all_posts, posts], ignore_index=True)
+                    print(f"Successfully collected {len(posts)} posts from r/{subreddit}")
+                else:
+                    print(f"No posts collected from r/{subreddit}")
         
         if not all_posts.empty:
             # Remove duplicates
@@ -77,9 +123,10 @@ class RedditCollector:
             
             # Save to CSV
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            all_posts.to_csv(f'{DATA_DIR}/reddit_data_{timestamp}.csv', index=False)
+            file_path = os.path.join(DATA_DIR, f'reddit_data_{timestamp}.csv')
+            all_posts.to_csv(file_path, index=False)
             print(f"\nTotal posts collected: {len(all_posts)}")
-            print(f"Data saved to: {DATA_DIR}/reddit_data_{timestamp}.csv")
+            print(f"Data saved to: {file_path}")
         else:
             print("\nNo posts were collected from any subreddit")
         
