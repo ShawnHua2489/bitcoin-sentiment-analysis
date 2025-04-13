@@ -20,34 +20,66 @@ class TrumpCollector:
 
     def categorize_announcement(self, title, text):
         """Categorize the type of announcement and determine if it's a direct Trump statement"""
+        # Convert to lowercase for case-insensitive matching
+        title_lower = title.lower()
+        text_lower = text.lower() if text else title_lower
+        
+        # Direct statement indicators
+        direct_indicators = [
+            'trump says', 'trump announces', 'trump declares', 'trump tweets',
+            'trump statement', 'trump statement on', 'trump:', 'trump stated',
+            'trump commented', 'trump remarked', 'trump made clear',
+            'trump made it clear', 'trump made the announcement',
+            'trump made the statement', 'trump made the comment',
+            'trump made the remark', 'trump made the declaration'
+        ]
+        
+        # Crypto-related keywords
+        crypto_keywords = [
+            'bitcoin', 'btc', 'crypto', 'cryptocurrency', 'digital currency',
+            'blockchain', 'digital asset', 'digital gold', 'crypto asset',
+            'crypto currency', 'crypto market', 'crypto regulation',
+            'crypto policy', 'crypto ban', 'crypto tax', 'crypto mining'
+        ]
+        
+        # Determine if it's a direct Trump statement
+        is_direct = any(indicator in title_lower for indicator in direct_indicators)
+        
+        # Check if it's crypto-related
+        is_crypto = any(keyword in title_lower or keyword in text_lower 
+                       for keyword in crypto_keywords)
+        
         # Analyze sentiment
         title_sentiment = TextBlob(title).sentiment
         text_sentiment = TextBlob(text).sentiment if text else title_sentiment
         
-        # Determine if it's a direct Trump statement
-        is_direct = any(phrase in title.lower() for phrase in [
-            'trump says', 'trump announces', 'trump declares', 'trump tweets',
-            'trump statement', 'trump statement on', 'trump:'
-        ])
-        
-        # Categorize the content
-        categories = {
-            'trade': ['trade', 'tariff', 'economy', 'market', 'business'],
-            'crypto': ['crypto', 'bitcoin', 'cryptocurrency', 'blockchain'],
-            'policy': ['policy', 'decision', 'action', 'order', 'directive'],
-            'political': ['election', 'campaign', 'president', 'democrat', 'republican'],
-            'legal': ['court', 'trial', 'investigation', 'charge', 'indictment']
-        }
-        
+        # Determine the type of content
         content_type = 'other'
-        for category, keywords in categories.items():
-            if any(keyword in title.lower() for keyword in keywords):
-                content_type = category
-                break
+        if is_crypto:
+            content_type = 'crypto'
+        elif any(keyword in title_lower for keyword in ['trade', 'tariff', 'economy', 'market']):
+            content_type = 'trade'
+        elif any(keyword in title_lower for keyword in ['policy', 'decision', 'action', 'order']):
+            content_type = 'policy'
+        elif any(keyword in title_lower for keyword in ['election', 'campaign', 'president']):
+            content_type = 'political'
+        elif any(keyword in title_lower for keyword in ['court', 'trial', 'investigation']):
+            content_type = 'legal'
+        
+        # Calculate confidence score
+        confidence_score = 0
+        if is_direct:
+            confidence_score += 0.4
+        if is_crypto:
+            confidence_score += 0.3
+        if content_type == 'crypto':
+            confidence_score += 0.3
         
         return {
             'is_direct': is_direct,
+            'is_crypto': is_crypto,
             'content_type': content_type,
+            'confidence_score': confidence_score,
             'sentiment_polarity': title_sentiment.polarity,
             'sentiment_subjectivity': title_sentiment.subjectivity
         }
@@ -65,7 +97,10 @@ class TrumpCollector:
                 'Republican',
                 'Trump',
                 'The_Donald',
-                'AskTrumpSupporters'
+                'AskTrumpSupporters',
+                'CryptoCurrency',
+                'Bitcoin',
+                'CryptoMarkets'
             ]
             
             print(f"\nSearching for Trump announcements from {start_date.date()} to present...")
@@ -81,7 +116,9 @@ class TrumpCollector:
                         'trump announcement OR trump statement OR trump tweet',
                         'trump policy OR trump decision OR trump action',
                         'trump trade OR trump tariff OR trump economy',
-                        'trump crypto OR trump bitcoin OR trump cryptocurrency'
+                        'trump crypto OR trump bitcoin OR trump cryptocurrency',
+                        'trump digital currency OR trump blockchain',
+                        'trump crypto regulation OR trump crypto policy'
                     ]
                     
                     for query in queries:
@@ -96,20 +133,24 @@ class TrumpCollector:
                                 # Categorize the announcement
                                 categorization = self.categorize_announcement(post.title, post.selftext)
                                 
-                                announcements.append({
-                                    'title': post.title,
-                                    'text': post.selftext,
-                                    'created_at': post_date,
-                                    'url': post.url,
-                                    'subreddit': subreddit_name,
-                                    'score': post.score,
-                                    'num_comments': post.num_comments,
-                                    'query': query,
-                                    'is_direct': categorization['is_direct'],
-                                    'content_type': categorization['content_type'],
-                                    'sentiment_polarity': categorization['sentiment_polarity'],
-                                    'sentiment_subjectivity': categorization['sentiment_subjectivity']
-                                })
+                                # Only include if it's a direct statement or has high confidence
+                                if categorization['is_direct'] or categorization['confidence_score'] >= 0.6:
+                                    announcements.append({
+                                        'title': post.title,
+                                        'text': post.selftext,
+                                        'created_at': post_date,
+                                        'url': post.url,
+                                        'subreddit': subreddit_name,
+                                        'score': post.score,
+                                        'num_comments': post.num_comments,
+                                        'query': query,
+                                        'is_direct': categorization['is_direct'],
+                                        'is_crypto': categorization['is_crypto'],
+                                        'content_type': categorization['content_type'],
+                                        'confidence_score': categorization['confidence_score'],
+                                        'sentiment_polarity': categorization['sentiment_polarity'],
+                                        'sentiment_subjectivity': categorization['sentiment_subjectivity']
+                                    })
                 except Exception as e:
                     print(f"Error searching r/{subreddit_name}: {str(e)}")
                     continue
@@ -118,14 +159,16 @@ class TrumpCollector:
             if not df.empty:
                 print(f"\nFound {len(df)} Trump-related announcements since {start_date.date()}")
                 
-                # Sort by creation date
-                df = df.sort_values('created_at', ascending=False)
+                # Sort by confidence score and creation date
+                df = df.sort_values(['confidence_score', 'created_at'], ascending=[False, False])
                 
                 # Print sample announcements with categorization
                 print("\nSample Announcements:")
                 for i in range(min(5, len(df))):
                     print(f"\n{df.iloc[i]['created_at']}: {df.iloc[i]['title']}")
                     print(f"Type: {'Direct' if df.iloc[i]['is_direct'] else 'Indirect'} {df.iloc[i]['content_type']} announcement")
+                    print(f"Crypto-related: {'Yes' if df.iloc[i]['is_crypto'] else 'No'}")
+                    print(f"Confidence Score: {df.iloc[i]['confidence_score']:.2f}")
                     print(f"Sentiment: {df.iloc[i]['sentiment_polarity']:.2f} (polarity), {df.iloc[i]['sentiment_subjectivity']:.2f} (subjectivity)")
                     print(f"Subreddit: r/{df.iloc[i]['subreddit']}")
                     print(f"Score: {df.iloc[i]['score']}, Comments: {df.iloc[i]['num_comments']}")
@@ -140,13 +183,14 @@ class TrumpCollector:
                 print("\nSummary Statistics:")
                 print(f"Total announcements: {len(df)}")
                 print(f"Direct announcements: {df['is_direct'].sum()}")
-                print(f"Indirect announcements: {len(df) - df['is_direct'].sum()}")
+                print(f"Crypto-related announcements: {df['is_crypto'].sum()}")
+                print(f"High confidence announcements (score >= 0.6): {len(df[df['confidence_score'] >= 0.6])}")
                 print("\nAnnouncements by type:")
                 print(df['content_type'].value_counts())
                 print("\nAnnouncements by subreddit:")
                 print(df['subreddit'].value_counts())
-                print("\nAverage sentiment by content type:")
-                print(df.groupby('content_type')['sentiment_polarity'].mean())
+                print("\nAverage confidence by content type:")
+                print(df.groupby('content_type')['confidence_score'].mean())
                 
             return df
                 
